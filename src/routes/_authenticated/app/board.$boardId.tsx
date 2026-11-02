@@ -49,20 +49,40 @@ function BoardPage() {
   const deselectItems = useSelectionStore(s => s.deselectItems);
   const [showAutomations, setShowAutomations] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const prevTaskGroupsRef = useRef<Map<string, string>>(new Map());
+  const prevSubitemTasksRef = useRef<Map<string, string>>(new Map());
 
   // Clear selection when switching boards
   useEffect(() => { clearSelection(); }, [boardId]);
 
-  // Deselect tasks/subitems that are no longer on this board (e.g. moved away by automation)
+  // Deselect tasks/subitems moved away by automation (to a different board or group)
   useEffect(() => {
+    const { selectedTaskIds, selectedSubitemIds } = useSelectionStore.getState();
     const taskIds = new Set(data.tasks.map(t => t.id));
     const subitemIds = new Set(data.subitems.map(s => s.id));
-    const { selectedTaskIds, selectedSubitemIds } = useSelectionStore.getState();
+
     const staleTasks = [...selectedTaskIds].filter(id => !taskIds.has(id));
     const staleSubitems = [...selectedSubitemIds].filter(id => !subitemIds.has(id));
-    if (staleTasks.length > 0 || staleSubitems.length > 0) {
-      deselectItems(staleTasks, staleSubitems);
+
+    const movedTasks = [...selectedTaskIds].filter(id => {
+      const prev = prevTaskGroupsRef.current.get(id);
+      const cur = data.tasks.find(t => t.id === id);
+      return prev !== undefined && cur !== undefined && cur.groupId !== prev;
+    });
+    const movedSubitems = [...selectedSubitemIds].filter(id => {
+      const prev = prevSubitemTasksRef.current.get(id);
+      const cur = data.subitems.find(s => s.id === id);
+      return prev !== undefined && cur !== undefined && cur.taskId !== prev;
+    });
+
+    const toDeselectTasks = [...new Set([...staleTasks, ...movedTasks])];
+    const toDeselectSubitems = [...new Set([...staleSubitems, ...movedSubitems])];
+    if (toDeselectTasks.length > 0 || toDeselectSubitems.length > 0) {
+      deselectItems(toDeselectTasks, toDeselectSubitems);
     }
+
+    prevTaskGroupsRef.current = new Map(data.tasks.map(t => [t.id, t.groupId]));
+    prevSubitemTasksRef.current = new Map(data.subitems.map(s => [s.id, s.taskId]));
   }, [data]);
 
   // On load (and board switch), check whether any tasks already satisfy an
