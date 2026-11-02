@@ -93,3 +93,19 @@ export const authed = pub.use(requireAuthMiddleware);
 export const workspaceOptional = authed.use(workspaceMiddleware);
 export const workspaceScoped = workspaceOptional.use(requireWorkspaceMiddleware);
 export { database };
+
+const roleRank: Record<string, number> = { owner: 2, admin: 1, member: 0 };
+
+export async function requireWorkspaceRole(
+  workspaceId: string,
+  userId: string,
+  minRole: 'admin' | 'owner',
+) {
+  const [member] = await database
+    .select({ role: workspaceMemberTable.role })
+    .from(workspaceMemberTable)
+    .where(and(eq(workspaceMemberTable.workspaceId, workspaceId), eq(workspaceMemberTable.userId, userId)));
+  if (!member || (roleRank[member.role] ?? 0) < roleRank[minRole]!) {
+    throw new ORPCError('FORBIDDEN', { message: 'You do not have permission to perform this action.' });
+  }
+}

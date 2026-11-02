@@ -1,7 +1,7 @@
 import { ORPCError } from '@orpc/client';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { database, workspaceScoped } from '@/rpc/base';
+import { database, requireWorkspaceRole, workspaceScoped } from '@/rpc/base';
 import { boardTable, groupTable, taskTable, subitemTable, columnTable, automationTable } from '@/database/schema';
 import { nanoid } from '@/lib/utils';
 import { broadcastBoardUpdate } from '@/lib/board-events';
@@ -17,6 +17,7 @@ export const listBoards = workspaceScoped.handler(async ({ context }) => {
 export const createBoard = workspaceScoped
   .input(z.object({ name: z.string().min(1).max(200).default('New Board') }))
   .handler(async ({ input, context }) => {
+    await requireWorkspaceRole(context.workspace.id, context.userSession.user.id, 'admin');
     const [board] = await database.insert(boardTable).values({
       id: nanoid(),
       workspaceId: context.workspace.id,
@@ -49,6 +50,7 @@ export const updateBoard = workspaceScoped
 export const deleteBoard = workspaceScoped
   .input(z.object({ boardId: z.string() }))
   .handler(async ({ input, context }) => {
+    await requireWorkspaceRole(context.workspace.id, context.userSession.user.id, 'admin');
     await database.delete(boardTable)
       .where(and(eq(boardTable.id, input.boardId), eq(boardTable.workspaceId, context.workspace.id)));
     return { success: true };
@@ -166,6 +168,7 @@ export const getCalendarData = workspaceScoped
 export const createGroup = workspaceScoped
   .input(z.object({ boardId: z.string(), title: z.string().default('New Group'), color: z.string().default('#4263eb') }))
   .handler(async ({ input, context }) => {
+    await requireWorkspaceRole(context.workspace.id, context.userSession.user.id, 'admin');
     const [board] = await database.select().from(boardTable)
       .where(and(eq(boardTable.id, input.boardId), eq(boardTable.workspaceId, context.workspace.id)));
     if (!board) throw new ORPCError('NOT_FOUND', { message: 'Board not found.' });
@@ -196,7 +199,8 @@ export const updateGroup = workspaceScoped
 
 export const deleteGroup = workspaceScoped
   .input(z.object({ groupId: z.string() }))
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    await requireWorkspaceRole(context.workspace.id, context.userSession.user.id, 'admin');
     const [grp] = await database.select({ boardId: groupTable.boardId })
       .from(groupTable).where(eq(groupTable.id, input.groupId));
     await database.delete(groupTable).where(eq(groupTable.id, input.groupId));

@@ -1,7 +1,7 @@
 import { ORPCError } from '@orpc/client';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { authed, database, workspaceOptional, workspaceScoped } from '@/rpc/base';
+import { authed, database, requireWorkspaceRole, workspaceOptional, workspaceScoped } from '@/rpc/base';
 import { workspaceMemberTable, workspaceTable, userPreferencesTable, userTable } from '@/database/schema';
 import { nanoid } from '@/lib/utils';
 
@@ -137,6 +137,7 @@ export const setActiveWorkspace = authed
 export const updateWorkspace = workspaceScoped
   .input(z.object({ name: z.string().min(1).max(100) }))
   .handler(async ({ input, context }) => {
+    await requireWorkspaceRole(context.workspace.id, context.userSession.user.id, 'admin');
     const [workspace] = await database
       .update(workspaceTable)
       .set({ name: input.name, updatedAt: new Date() })
@@ -148,12 +149,32 @@ export const updateWorkspace = workspaceScoped
 // Regenerate invite token — invalidates the current link
 export const regenerateInviteToken = workspaceScoped
   .handler(async ({ context }) => {
+    await requireWorkspaceRole(context.workspace.id, context.userSession.user.id, 'admin');
     const [workspace] = await database
       .update(workspaceTable)
       .set({ inviteToken: nanoid(32), updatedAt: new Date() })
       .where(eq(workspaceTable.id, context.workspace.id))
       .returning();
     return workspace!;
+  });
+
+// Change a member's role — owners only, cannot change another owner's role
+export const setMemberRole = workspaceScoped
+  .input(z.object({ memberId: z.string(), role: z.enum(['admin', 'member']) }))
+  .handler(async ({ input, context }) => {
+    await requireWorkspaceRole(context.workspace.id, context.userSession.user.id, 'owner');
+    const [target] = await database
+      .select({ role: workspaceMemberTable.role })
+      .from(workspaceMemberTable)
+      .where(and(eq(workspaceMemberTable.id, input.memberId), eq(workspaceMemberTable.workspaceId, context.workspace.id)));
+    if (!target) throw new ORPCError('NOT_FOUND', { message: 'Member not found.' });
+    if (target.role === 'owner') throw new ORPCError('FORBIDDEN', { message: "Cannot change the owner's role." });
+    const [updated] = await database
+      .update(workspaceMemberTable)
+      .set({ role: input.role })
+      .where(and(eq(workspaceMemberTable.id, input.memberId), eq(workspaceMemberTable.workspaceId, context.workspace.id)))
+      .returning();
+    return updated!;
   });
 
 // List workspace members with user info

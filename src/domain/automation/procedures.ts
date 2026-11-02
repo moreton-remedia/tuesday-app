@@ -1,7 +1,7 @@
 import { ORPCError } from '@orpc/client';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { database, workspaceScoped } from '@/rpc/base';
+import { database, requireWorkspaceRole, workspaceScoped } from '@/rpc/base';
 import { automationTable, boardTable } from '@/database/schema';
 import { nanoid } from '@/lib/utils';
 import { broadcastBoardUpdate } from '@/lib/board-events';
@@ -52,6 +52,7 @@ export const createAutomation = workspaceScoped
     actions: z.array(actionSchema).min(1),
   }))
   .handler(async ({ input, context }) => {
+    await requireWorkspaceRole(context.workspace.id, context.userSession.user.id, 'admin');
     const [board] = await database.select().from(boardTable)
       .where(and(eq(boardTable.id, input.boardId), eq(boardTable.workspaceId, context.workspace.id)));
     if (!board) throw new ORPCError('NOT_FOUND', { message: 'Board not found.' });
@@ -72,7 +73,8 @@ export const updateAutomation = workspaceScoped
     trigger: triggerSchema.optional(),
     actions: z.array(actionSchema).optional(),
   }))
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    await requireWorkspaceRole(context.workspace.id, context.userSession.user.id, 'admin');
     const patch: Record<string, unknown> = { updatedAt: new Date() };
     if (input.enabled !== undefined) patch.enabled = input.enabled ? 1 : 0;
     if (input.trigger !== undefined) patch.trigger = input.trigger;
@@ -85,7 +87,8 @@ export const updateAutomation = workspaceScoped
 
 export const deleteAutomation = workspaceScoped
   .input(z.object({ automationId: z.string() }))
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    await requireWorkspaceRole(context.workspace.id, context.userSession.user.id, 'admin');
     const [auto] = await database.select({ boardId: automationTable.boardId })
       .from(automationTable).where(eq(automationTable.id, input.automationId));
     await database.delete(automationTable).where(eq(automationTable.id, input.automationId));

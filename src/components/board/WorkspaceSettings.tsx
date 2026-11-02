@@ -2,6 +2,7 @@ import { createPortal } from 'react-dom';
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { orpcClient, orpcUtils } from '@/rpc/react';
+import { useSession } from '@/common/auth-client';
 
 interface WorkspaceSettingsProps {
   workspaceName: string;
@@ -17,7 +18,16 @@ export function WorkspaceSettings({ workspaceName, inviteToken, onClose }: Works
   const nameInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  const session = useSession();
+  const currentUserId = session.data?.user.id;
   const { data: members } = useQuery(orpcUtils.workspace.listMembers.queryOptions({ input: {} }));
+  const currentMember = members?.find(m => m.userId === currentUserId);
+  const isOwner = currentMember?.role === 'owner';
+
+  async function handleRoleChange(memberId: string, role: 'admin' | 'member') {
+    await orpcClient.workspace.setMemberRole({ memberId, role });
+    qc.invalidateQueries(orpcUtils.workspace.listMembers.queryOptions({ input: {} }));
+  }
 
   const inviteLink = `${window.location.origin}/join/${inviteToken}`;
 
@@ -166,20 +176,35 @@ export function WorkspaceSettings({ workspaceName, inviteToken, onClose }: Works
             <p className="text-xs text-app-t3">Loading…</p>
           ) : (
             <ul className="space-y-1">
-              {members.map(m => (
-                <li key={m.id} className="flex items-center gap-3 py-1.5">
-                  <div className="w-7 h-7 rounded-full bg-app-ac/20 text-app-ac flex items-center justify-center text-xs font-semibold flex-shrink-0 overflow-hidden">
-                    {m.image
-                      ? <img src={m.image} alt="" className="w-full h-full object-cover" />
-                      : m.name.charAt(0).toUpperCase()}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-app-t1 truncate">{m.name}</p>
-                    <p className="text-xs text-app-t3 truncate">{m.email}</p>
-                  </div>
-                  <span className="text-xs text-app-t3 capitalize flex-shrink-0">{m.role}</span>
-                </li>
-              ))}
+              {members.map(m => {
+                const roleLabel = m.role === 'owner' ? 'Owner' : m.role === 'admin' ? 'Administrator' : 'Editor';
+                const canEdit = isOwner && m.role !== 'owner' && m.userId !== currentUserId;
+                return (
+                  <li key={m.id} className="flex items-center gap-3 py-1.5">
+                    <div className="w-7 h-7 rounded-full bg-app-ac/20 text-app-ac flex items-center justify-center text-xs font-semibold flex-shrink-0 overflow-hidden">
+                      {m.image
+                        ? <img src={m.image} alt="" className="w-full h-full object-cover" />
+                        : m.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-app-t1 truncate">{m.name}</p>
+                      <p className="text-xs text-app-t3 truncate">{m.email}</p>
+                    </div>
+                    {canEdit ? (
+                      <select
+                        value={m.role}
+                        onChange={e => handleRoleChange(m.id, e.target.value as 'admin' | 'member')}
+                        className="text-xs text-app-t2 bg-app-s2 border border-app-ln rounded-md px-2 py-1 flex-shrink-0 focus:outline-none focus:border-app-ac cursor-pointer"
+                      >
+                        <option value="admin">Administrator</option>
+                        <option value="member">Editor</option>
+                      </select>
+                    ) : (
+                      <span className="text-xs text-app-t3 flex-shrink-0">{roleLabel}</span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
