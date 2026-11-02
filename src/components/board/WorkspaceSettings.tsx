@@ -1,6 +1,6 @@
 import { createPortal } from 'react-dom';
 import { useState, useEffect, useRef } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { orpcClient, orpcUtils } from '@/rpc/react';
 
 interface WorkspaceSettingsProps {
@@ -16,6 +16,8 @@ export function WorkspaceSettings({ workspaceName, inviteToken, onClose }: Works
   const [resetting, setResetting] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  const { data: members } = useQuery(orpcUtils.workspace.listMembers.queryOptions({ input: {} }));
 
   const inviteLink = `${window.location.origin}/join/${inviteToken}`;
 
@@ -135,7 +137,7 @@ export function WorkspaceSettings({ workspaceName, inviteToken, onClose }: Works
         </div>
 
         {/* Invite link */}
-        <div>
+        <div className="mb-6">
           <p className="text-xs text-app-t3 uppercase tracking-wider mb-2">Invite link</p>
           <p className="text-xs text-app-t3 mb-3">
             Anyone with this link can join your workspace.
@@ -155,6 +157,31 @@ export function WorkspaceSettings({ workspaceName, inviteToken, onClose }: Works
           >
             Reset invitation link…
           </button>
+        </div>
+
+        {/* Members */}
+        <div>
+          <p className="text-xs text-app-t3 uppercase tracking-wider mb-3">Members</p>
+          {!members ? (
+            <p className="text-xs text-app-t3">Loading…</p>
+          ) : (
+            <ul className="space-y-1">
+              {members.map(m => (
+                <li key={m.id} className="flex items-center gap-3 py-1.5">
+                  <div className="w-7 h-7 rounded-full bg-app-ac/20 text-app-ac flex items-center justify-center text-xs font-semibold flex-shrink-0 overflow-hidden">
+                    {m.image
+                      ? <img src={m.image} alt="" className="w-full h-full object-cover" />
+                      : m.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-app-t1 truncate">{m.name}</p>
+                    <p className="text-xs text-app-t3 truncate">{m.email}</p>
+                  </div>
+                  <span className="text-xs text-app-t3 capitalize flex-shrink-0">{m.role}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
 

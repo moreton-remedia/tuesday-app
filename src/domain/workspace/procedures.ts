@@ -2,7 +2,7 @@ import { ORPCError } from '@orpc/client';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { authed, database, workspaceOptional, workspaceScoped } from '@/rpc/base';
-import { workspaceMemberTable, workspaceTable, userPreferencesTable } from '@/database/schema';
+import { workspaceMemberTable, workspaceTable, userPreferencesTable, userTable } from '@/database/schema';
 import { nanoid } from '@/lib/utils';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -156,10 +156,20 @@ export const regenerateInviteToken = workspaceScoped
     return workspace!;
   });
 
-// List workspace members
+// List workspace members with user info
 export const listMembers = workspaceScoped.handler(async ({ context }) => {
   return database
-    .select({ member: workspaceMemberTable })
+    .select({
+      id: workspaceMemberTable.id,
+      role: workspaceMemberTable.role,
+      joinedAt: workspaceMemberTable.createdAt,
+      userId: userTable.id,
+      name: userTable.name,
+      email: userTable.email,
+      image: userTable.image,
+    })
     .from(workspaceMemberTable)
-    .where(eq(workspaceMemberTable.workspaceId, context.workspace.id));
+    .innerJoin(userTable, eq(workspaceMemberTable.userId, userTable.id))
+    .where(eq(workspaceMemberTable.workspaceId, context.workspace.id))
+    .orderBy(asc(workspaceMemberTable.createdAt));
 });
