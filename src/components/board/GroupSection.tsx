@@ -560,6 +560,11 @@ function TaskRow({ task, columns, subitems, subitemColumns, boardId, allBoardTas
       return { taskId: id, fields: { ...currentFields, [colId]: value } };
     });
 
+    // Snapshot group positions before the update (for automation-move detection)
+    const prevGroupById = new Map<string, string>(
+      (prev?.tasks as Task[] | undefined)?.map((t: Task) => [t.id, t.groupId] as const) ?? [],
+    );
+
     // Optimistic patch all affected tasks
     qc.setQueryData(queryKey, (old: any) => {
       if (!old) return old;
@@ -569,10 +574,36 @@ function TaskRow({ task, columns, subitems, subitemColumns, boardId, allBoardTas
 
     try {
       await Promise.all(updates.map(u => orpcClient.task.updateTaskFields(u)));
-      invalidate();
     } catch {
       qc.setQueryData(queryKey, prev);
       toast.error('Failed to save changes. Please try again.');
+      return;
+    }
+
+    // Fetch fresh data — automations have already run server-side, so this reflects their result
+    const freshData = await qc.fetchQuery({
+      ...orpcUtils.board.getBoardData.queryOptions({ input: { boardId } }),
+      staleTime: 0,
+    }) as any;
+
+    // Deselect any selected tasks/subitems that an automation moved to a different group
+    const newGroupById = new Map<string, string>((freshData.tasks as Task[]).map(t => [t.id, t.groupId]));
+    const movedTaskIds = new Set<string>();
+    for (const [id, pg] of prevGroupById) {
+      const cg = newGroupById.get(id);
+      if (cg === undefined || cg !== pg) movedTaskIds.add(id);
+    }
+
+    if (movedTaskIds.size > 0) {
+      const { selectedTaskIds: curTaskSel, selectedSubitemIds: curSubSel, deselectItems } = useSelectionStore.getState();
+      const toDeselectTasks = [...curTaskSel].filter(id => movedTaskIds.has(id));
+      const toDeselectSubs = [...curSubSel].filter(id => {
+        const sub = (freshData.subitems as Subitem[]).find(s => s.id === id);
+        return !sub || movedTaskIds.has(sub.taskId);
+      });
+      if (toDeselectTasks.length || toDeselectSubs.length) {
+        deselectItems(toDeselectTasks, toDeselectSubs);
+      }
     }
   }
 

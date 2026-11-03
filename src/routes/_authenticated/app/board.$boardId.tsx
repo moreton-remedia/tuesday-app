@@ -49,72 +49,47 @@ function BoardPage() {
   const deselectItems = useSelectionStore(s => s.deselectItems);
   const [showAutomations, setShowAutomations] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const selectedTaskIds = useSelectionStore(s => s.selectedTaskIds);
-  const selectedSubitemIds = useSelectionStore(s => s.selectedSubitemIds);
-  // groupId/taskId recorded at the moment each item entered the selection
-  const taskOriginsRef = useRef<Map<string, string>>(new Map());
-  const subitemOriginsRef = useRef<Map<string, string>>(new Map());
+  // Snapshot of task→groupId from the previous data render, for SSE-triggered move detection
+  const prevTaskGroupsRef = useRef<Map<string, string>>(new Map());
 
-  // Clear selection when switching boards
-  useEffect(() => { clearSelection(); }, [boardId]);
-
-  // Keep origins in sync with the selection set
+  // Clear selection and reset snapshot when switching boards
   useEffect(() => {
-    const taskMap = new Map(data.tasks.map(t => [t.id, t.groupId]));
-    const subMap = new Map(data.subitems.map(s => [s.id, s.taskId]));
-    for (const id of selectedTaskIds) {
-      if (!taskOriginsRef.current.has(id)) {
-        const g = taskMap.get(id);
-        if (g !== undefined) taskOriginsRef.current.set(id, g);
-      }
-    }
-    for (const [id] of taskOriginsRef.current) {
-      if (!selectedTaskIds.has(id)) taskOriginsRef.current.delete(id);
-    }
-    for (const id of selectedSubitemIds) {
-      if (!subitemOriginsRef.current.has(id)) {
-        const t = subMap.get(id);
-        if (t !== undefined) subitemOriginsRef.current.set(id, t);
-      }
-    }
-    for (const [id] of subitemOriginsRef.current) {
-      if (!selectedSubitemIds.has(id)) subitemOriginsRef.current.delete(id);
-    }
-  }, [selectedTaskIds, selectedSubitemIds]);
+    clearSelection();
+    prevTaskGroupsRef.current = new Map();
+  }, [boardId]);
 
-  // Deselect tasks/subitems moved away by automation (to a different board or group)
+  // Deselect tasks/subitems moved to a different group by an automation
+  // (covers SSE-triggered moves from other users; local moves are handled in handleFieldChange)
   useEffect(() => {
     const { selectedTaskIds: taskSel, selectedSubitemIds: subSel } = useSelectionStore.getState();
-    const taskMap = new Map(data.tasks.map(t => [t.id, t.groupId]));
-    const subMap = new Map(data.subitems.map(s => [s.id, s.taskId]));
 
-    const toDeselectTasks: string[] = [];
+    const currGroups = new Map(data.tasks.map(t => [t.id, t.groupId]));
+    const prevGroups = prevTaskGroupsRef.current;
+    prevTaskGroupsRef.current = currGroups;
+
+    if (taskSel.size === 0 && subSel.size === 0) return;
+
+    // Set of tasks that moved or left the board
+    const movedTaskIds = new Set<string>();
+    for (const [id, pg] of prevGroups) {
+      const cg = currGroups.get(id);
+      if (cg === undefined || cg !== pg) movedTaskIds.add(id);
+    }
+    // Also catch selected tasks that left the board (not in prevGroups)
     for (const id of taskSel) {
-      const cur = taskMap.get(id);
-      if (cur === undefined) {
-        toDeselectTasks.push(id); // left board
-      } else {
-        const orig = taskOriginsRef.current.get(id);
-        if (orig !== undefined && cur !== orig) toDeselectTasks.push(id); // moved group
-      }
+      if (!currGroups.has(id)) movedTaskIds.add(id);
     }
 
-    const movedTaskIds = new Set(toDeselectTasks);
-    const toDeselectSubitems: string[] = [];
-    for (const id of subSel) {
-      const cur = subMap.get(id);
-      if (cur === undefined) {
-        toDeselectSubitems.push(id); // left board
-      } else if (movedTaskIds.has(cur)) {
-        toDeselectSubitems.push(id); // parent task moved
-      } else {
-        const orig = subitemOriginsRef.current.get(id);
-        if (orig !== undefined && cur !== orig) toDeselectSubitems.push(id); // moved to different task
-      }
-    }
+    if (movedTaskIds.size === 0) return;
 
-    if (toDeselectTasks.length || toDeselectSubitems.length) {
-      deselectItems(toDeselectTasks, toDeselectSubitems);
+    const toDeselectTasks = [...taskSel].filter(id => movedTaskIds.has(id));
+    const toDeselectSubs = [...subSel].filter(id => {
+      const sub = data.subitems.find(s => s.id === id);
+      return !sub || movedTaskIds.has(sub.taskId);
+    });
+
+    if (toDeselectTasks.length || toDeselectSubs.length) {
+      deselectItems(toDeselectTasks, toDeselectSubs);
     }
   }, [data]);
 
