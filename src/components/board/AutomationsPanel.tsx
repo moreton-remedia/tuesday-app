@@ -57,7 +57,7 @@ export function AutomationsPanel({ boardId, automations, columns, groups, allBoa
     setEditing(created as Automation);
   }
 
-  const triggerCols = columns.filter(c => c.type === 'status' || c.type === 'dropdown' || c.type === 'notes' || c.type === 'link');
+  const triggerCols = columns.filter(c => c.type === 'status' || c.type === 'dropdown' || c.type === 'notes' || c.type === 'link' || c.type === 'date');
 
   return (
     <>
@@ -441,6 +441,13 @@ function AutomationCard({
                   <span className="text-app-t3">{auto.trigger.linkedOp === 'contains' ? 'contains ' : 'is '}</span>
                   <span className="text-app-ac font-medium">{auto.trigger.linkedValue ?? '…'}</span>
                 </>
+              ) : auto.trigger.type === 'date-is' ? (
+                <>
+                  {' is '}
+                  <span className="text-app-ac font-medium">
+                    {auto.trigger.value === 'today' ? 'today' : auto.trigger.value === 'past' ? 'past (overdue)' : 'upcoming'}
+                  </span>
+                </>
               ) : (
                 <>
                   {auto.trigger.type === 'text-contains' ? ' contains ' : ' changes to '}
@@ -635,6 +642,7 @@ function AutomationEditor({
         primaryCol?.type === 'status' ? 'status-changes-to' :
         primaryCol?.type === 'notes'  ? 'text-contains' :
         primaryCol?.type === 'link'   ? 'link-changes' :
+        primaryCol?.type === 'date'   ? 'date-is' :
         'dropdown-changes-to';
       const trigger: AutomationTrigger = {
         type: triggerType,
@@ -821,6 +829,7 @@ function ConditionRow({ cond, idx, scope = 'all', showScope = false, onScopeChan
   const col = allColumns.find(c => c.id === cond.colId);
   const isLink = col?.type === 'link';
   const isText = col?.type === 'notes';
+  const isDate = col?.type === 'date';
   const valueOptions =
     col?.type === 'status'   ? (col.statusOptions ?? []).map(o => ({ key: o.key,   label: o.label })) :
     col?.type === 'dropdown' ? (col.options ?? []).map(o => ({ key: o.label, label: o.label })) : [];
@@ -936,8 +945,20 @@ function ConditionRow({ cond, idx, scope = 'all', showScope = false, onScopeChan
         {/* ── Non-link columns ── */}
         {!isLink && (
           <>
-            {isText ? ' contains ' : ' changes to '}
-            {isText ? (
+            {isDate ? ' is ' : isText ? ' contains ' : ' changes to '}
+            {isDate ? (
+              <Token
+                value={cond.value}
+                onChange={v => onChange({ value: v })}
+                options={[
+                  { key: 'today',  label: 'today' },
+                  { key: 'past',   label: 'past (overdue)' },
+                  { key: 'future', label: 'upcoming' },
+                ]}
+                variant="accent"
+                placeholder="when"
+              />
+            ) : isText ? (
               <TextToken value={cond.value} onChange={v => onChange({ value: v })} placeholder="text…" />
             ) : (
               <Token

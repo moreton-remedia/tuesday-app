@@ -229,6 +229,18 @@ async function evaluateTrigger(
   trigger: AutomationTrigger,
   fields: Record<string, string>,
 ): Promise<boolean> {
+  if (trigger.type === 'date-is') {
+    const raw = fields[trigger.colId];
+    if (!raw) return false;
+    // Compare date portion only (strip optional time component)
+    const dateOnly = raw.includes('T') ? raw.slice(0, 10) : raw;
+    const today = new Date().toISOString().slice(0, 10);
+    if (trigger.value === 'today')   return dateOnly === today;
+    if (trigger.value === 'past')    return dateOnly < today;
+    if (trigger.value === 'future')  return dateOnly > today;
+    return false;
+  }
+
   if (trigger.type === 'link-changes') {
     const linkedTaskId = fields[trigger.colId];
     if (!linkedTaskId || !trigger.linkedColId) return false;
@@ -471,10 +483,12 @@ async function runBoardAutomations(boardId: string) {
         // so all action types ARE expected to run on load as a catch-up mechanism.
         if (
           auto.trigger.type !== 'link-changes' &&
+          auto.trigger.type !== 'date-is' &&
           (action.type === 'create-subitem' ||
            action.type === 'create-task' ||
            action.type === 'set-status' ||
-           action.type === 'set-dropdown')
+           action.type === 'set-dropdown' ||
+           action.type === 'set-notes')
         ) continue;
         await executeAction(action, task.id, task.groupId, boardId, fields);
         fired = true;

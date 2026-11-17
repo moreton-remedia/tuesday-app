@@ -2,7 +2,7 @@ import { integer, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 import { boardTable } from './board';
 
 export type AutomationTrigger = {
-  type: 'status-changes-to' | 'dropdown-changes-to' | 'text-contains' | 'link-changes';
+  type: 'status-changes-to' | 'dropdown-changes-to' | 'text-contains' | 'link-changes' | 'date-is';
   colId: string;
   value: string;
   /** Human-readable name for this automation (stored here to avoid a migration) */
