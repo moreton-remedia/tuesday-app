@@ -29,7 +29,7 @@ export type AutomationTrigger = {
 };
 
 export type AutomationAction = {
-  type: 'set-status' | 'set-dropdown' | 'move-to-group' | 'copy-to' | 'create-task' | 'create-subitem';
+  type: 'set-status' | 'set-dropdown' | 'set-notes' | 'move-to-group' | 'copy-to' | 'create-task' | 'create-subitem';
   colId?: string;
   value?: string;
   groupId?: string;

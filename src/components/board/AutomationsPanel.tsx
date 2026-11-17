@@ -384,6 +384,13 @@ function AutomationCard({
           ? `copy item to "${group?.title ?? '…'}" on "${board.name}"`
           : `copy item to "${group?.title ?? '…'}"`;
       }
+      case 'set-notes': {
+        const col = columns.find(c => c.id === action.colId);
+        const preview = action.value
+          ? ` "${action.value.length > 30 ? action.value.slice(0, 30) + '…' : action.value}"`
+          : '';
+        return `write${preview} to ${col?.label ?? '…'}`;
+      }
       case 'create-subitem':
         return `create subitem${action.name ? ` "${action.name}"` : ''}`;
       default:
@@ -494,6 +501,7 @@ function AutomationCard({
 const ACTION_TYPES = [
   { type: 'set-status',     label: 'set status' },
   { type: 'set-dropdown',   label: 'set dropdown' },
+  { type: 'set-notes',      label: 'write to notes' },
   { type: 'move-to-group',  label: 'move to group' },
   { type: 'copy-to',        label: 'copy item to' },
   { type: 'create-subitem', label: 'create subitem' },
@@ -611,6 +619,7 @@ function AutomationEditor({
     }) &&
     actions.every(a => {
       if (a.type === 'set-status' || a.type === 'set-dropdown') return !!(a.colId && a.value);
+      if (a.type === 'set-notes') return !!a.colId;
       if (a.type === 'move-to-group' || a.type === 'copy-to') return !!a.groupId;
       return true; // create-subitem, create-task: name can be empty
     });
@@ -660,6 +669,8 @@ function AutomationEditor({
       };
       const builtActions: AutomationAction[] = actions.map(a =>
         a.type === 'set-status' || a.type === 'set-dropdown'
+          ? { type: a.type, colId: a.colId, value: a.value }
+          : a.type === 'set-notes'
           ? { type: a.type, colId: a.colId, value: a.value }
           : (a.type === 'move-to-group' || a.type === 'copy-to')
           ? { type: a.type, groupId: a.groupId, destBoardId: a.boardId }
@@ -1009,6 +1020,21 @@ function ActionRow({ action, boardId, allColumns, groups, allBoards, canRemove, 
               placeholder="value"
               disabled={!action.colId}
             />
+          </>
+        )}
+
+        {action.type === 'set-notes' && (
+          <>
+            <Token
+              value={action.colId}
+              onChange={v => onChange({ colId: v, value: '' })}
+              options={allColumns
+                .filter(c => c.type === 'notes' && c.scope === 'task')
+                .map(c => ({ key: c.id, label: c.label }))}
+              placeholder="column"
+            />
+            <span className="mx-0.5">with</span>
+            <TextToken value={action.value} onChange={v => onChange({ value: v })} placeholder="text…" />
           </>
         )}
 

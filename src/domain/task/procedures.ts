@@ -511,6 +511,18 @@ async function executeAction(
         .where(eq(taskTable.id, taskId));
       break;
     }
+    case 'set-notes': {
+      if (!action.colId) break;
+      const [currentTask] = await database.select({ fields: taskTable.fields })
+        .from(taskTable).where(eq(taskTable.id, taskId));
+      if (!currentTask) break;
+      const taskFields = (currentTask.fields as Record<string, string>) ?? {};
+      const newFields = { ...taskFields, [action.colId]: action.value ?? '' };
+      await database.update(taskTable)
+        .set({ fields: newFields, updatedAt: new Date() })
+        .where(eq(taskTable.id, taskId));
+      break;
+    }
     case 'move-to-group': {
       if (!action.groupId) break;
       if (groupId === action.groupId) break; // already in the target group — skip
