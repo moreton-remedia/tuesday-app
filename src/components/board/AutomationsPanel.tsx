@@ -1055,7 +1055,7 @@ function ActionRow({ action, boardId, allColumns, groups, allBoards, canRemove, 
               placeholder="column"
             />
             <span className="mx-0.5">with</span>
-            <TextToken value={action.value} onChange={v => onChange({ value: v })} placeholder="text…" />
+            <TextToken value={action.value ?? ''} onChange={v => onChange({ value: v })} placeholder="value…" />
           </>
         )}
 
