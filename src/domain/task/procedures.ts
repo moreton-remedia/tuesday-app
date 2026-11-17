@@ -179,7 +179,7 @@ export const updateSubitem = workspaceScoped
       const [parentTask] = await database.select({ groupId: taskTable.groupId })
         .from(taskTable).where(eq(taskTable.id, sub.taskId));
       if (parentTask) {
-        await runTaskAutomations(sub.taskId, parentTask.groupId, input.fields).catch(() => {});
+        await runSubitemTriggeredAutomations(sub.taskId, parentTask.groupId, input.fields).catch(() => {});
       }
     }
 
@@ -378,6 +378,62 @@ async function runTaskAutomations(
   }
 
   // Broadcast so clients pick up anything the automation wrote (e.g. a new subitem)
+  if (fired) broadcastBoardUpdate(group.boardId);
+}
+
+/**
+ * Like runTaskAutomations, but called when a SUBITEM's fields change.
+ * For scope='all' triggers ("all [sub_column] changes to X"), verifies that
+ * every subitem on the task satisfies the condition before firing — not just
+ * the one that was just updated.  For scope='any' (the default when unset),
+ * fires as soon as the changed subitem matches (same as before).
+ */
+async function runSubitemTriggeredAutomations(
+  taskId: string,
+  groupId: string,
+  changedSubitemFields: Record<string, string>,
+) {
+  const [group] = await database.select({ boardId: groupTable.boardId })
+    .from(groupTable).where(eq(groupTable.id, groupId));
+  if (!group) return;
+
+  const automations = await database.select()
+    .from(automationTable)
+    .where(and(eq(automationTable.boardId, group.boardId), eq(automationTable.enabled, 1)));
+
+  let fired = false;
+  for (const auto of automations) {
+    const scope = auto.trigger.scope ?? 'all';
+
+    let shouldFire: boolean;
+    if (scope === 'all') {
+      // "All subitems" mode: only fire when every subitem of the task satisfies the condition.
+      const allSubitems = await database
+        .select({ fields: subitemTable.fields })
+        .from(subitemTable)
+        .where(eq(subitemTable.taskId, taskId));
+      if (allSubitems.length === 0) {
+        shouldFire = false;
+      } else {
+        const results = await Promise.all(
+          allSubitems.map(s =>
+            evaluateTrigger(auto.trigger, (s.fields as Record<string, string>) ?? {}),
+          ),
+        );
+        shouldFire = results.every(Boolean);
+      }
+    } else {
+      // "Any subitem" mode: fire if the changed subitem satisfies the condition.
+      shouldFire = await evaluateTrigger(auto.trigger, changedSubitemFields);
+    }
+
+    if (!shouldFire) continue;
+    for (const action of auto.actions) {
+      await executeAction(action, taskId, groupId, group.boardId, changedSubitemFields);
+      fired = true;
+    }
+  }
+
   if (fired) broadcastBoardUpdate(group.boardId);
 }
 
