@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { orpcClient, orpcUtils } from '@/rpc/react';
@@ -109,6 +109,8 @@ function MoveModal({ currentBoardId, currentGroups, boards, onMove, onClose }: {
   const [selectedBoardId, setSelectedBoardId] = useState(currentBoardId);
   const [selectedGroupId, setSelectedGroupId] = useState('');
   const [moving, setMoving] = useState(false);
+  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
+  const groupDropdownRef = useRef<HTMLDivElement>(null);
 
   const isCurrent = selectedBoardId === currentBoardId;
 
@@ -119,6 +121,18 @@ function MoveModal({ currentBoardId, currentGroups, boards, onMove, onClose }: {
   });
 
   const availableGroups: Group[] = isCurrent ? currentGroups : (remoteBoardData?.groups ?? []);
+  const selectedGroup = availableGroups.find(g => g.id === selectedGroupId);
+
+  // Close group dropdown when clicking outside
+  useEffect(() => {
+    function handlePointerDown(e: PointerEvent) {
+      if (groupDropdownRef.current && !groupDropdownRef.current.contains(e.target as Node)) {
+        setGroupDropdownOpen(false);
+      }
+    }
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, []);
 
   async function handleConfirm() {
     if (!selectedGroupId) return;
@@ -126,6 +140,8 @@ function MoveModal({ currentBoardId, currentGroups, boards, onMove, onClose }: {
     try { await onMove(selectedGroupId, selectedBoardId); }
     finally { setMoving(false); }
   }
+
+  const isGroupDisabled = isFetching || (!isCurrent && !remoteBoardData);
 
   return (
     <>
@@ -141,7 +157,7 @@ function MoveModal({ currentBoardId, currentGroups, boards, onMove, onClose }: {
             <label className="block text-xs text-app-t3 mb-1">Board</label>
             <select
               value={selectedBoardId}
-              onChange={e => { setSelectedBoardId(e.target.value); setSelectedGroupId(''); }}
+              onChange={e => { setSelectedBoardId(e.target.value); setSelectedGroupId(''); setGroupDropdownOpen(false); }}
               className="w-full bg-app-s2 border border-app-ln rounded-lg px-3 py-2 text-sm text-app-t1 outline-none focus:border-app-ac"
             >
               {boards.map(b => (
@@ -154,17 +170,42 @@ function MoveModal({ currentBoardId, currentGroups, boards, onMove, onClose }: {
 
           <div>
             <label className="block text-xs text-app-t3 mb-1">Group</label>
-            <select
-              value={selectedGroupId}
-              onChange={e => setSelectedGroupId(e.target.value)}
-              disabled={isFetching || (!isCurrent && !remoteBoardData)}
-              className="w-full bg-app-s2 border border-app-ln rounded-lg px-3 py-2 text-sm text-app-t1 outline-none focus:border-app-ac disabled:opacity-50"
-            >
-              <option value="">{isFetching ? 'Loading…' : 'Select group…'}</option>
-              {availableGroups.map(g => (
-                <option key={g.id} value={g.id}>{g.title}</option>
-              ))}
-            </select>
+            <div ref={groupDropdownRef} className="relative">
+              <button
+                type="button"
+                disabled={isGroupDisabled}
+                onClick={() => !isGroupDisabled && setGroupDropdownOpen(o => !o)}
+                className="w-full flex items-center gap-2 bg-app-s2 border border-app-ln rounded-lg px-3 py-2 text-sm text-app-t1 outline-none focus:border-app-ac disabled:opacity-50 text-left"
+              >
+                {selectedGroup ? (
+                  <>
+                    <span className="shrink-0 w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: selectedGroup.color }} />
+                    <span className="truncate">{selectedGroup.title}</span>
+                  </>
+                ) : (
+                  <span className="text-app-t3">{isFetching ? 'Loading…' : 'Select group…'}</span>
+                )}
+                <svg className="ml-auto shrink-0 text-app-t3" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 4l4 4 4-4" />
+                </svg>
+              </button>
+
+              {groupDropdownOpen && availableGroups.length > 0 && (
+                <div className="absolute z-10 mt-1 w-full bg-app-s1 border border-app-ln rounded-lg shadow-lg py-1 max-h-48 overflow-y-auto">
+                  {availableGroups.map(g => (
+                    <button
+                      key={g.id}
+                      type="button"
+                      onClick={() => { setSelectedGroupId(g.id); setGroupDropdownOpen(false); }}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-app-ln-s transition-colors ${g.id === selectedGroupId ? 'text-app-t1 font-medium' : 'text-app-t2'}`}
+                    >
+                      <span className="shrink-0 w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: g.color }} />
+                      <span className="truncate">{g.title}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
