@@ -7,7 +7,7 @@ import { nanoid } from '@/lib/utils';
 import { broadcastBoardUpdate } from '@/lib/board-events';
 
 const triggerSchema = z.object({
-  type: z.enum(['status-changes-to', 'dropdown-changes-to', 'text-contains', 'link-changes']),
+  type: z.enum(['status-changes-to', 'dropdown-changes-to', 'text-contains', 'link-changes', 'date-is']),
   colId: z.string(),
   value: z.string(),
   automationName: z.string().optional(),
@@ -27,7 +27,7 @@ const triggerSchema = z.object({
 });
 
 const actionSchema = z.object({
-  type: z.enum(['set-status', 'set-dropdown', 'move-to-group', 'copy-to', 'create-task', 'create-subitem']),
+  type: z.enum(['set-status', 'set-dropdown', 'set-notes', 'move-to-group', 'copy-to', 'create-task', 'create-subitem']),
   colId: z.string().optional(),
   value: z.string().optional(),
   groupId: z.string().optional(),
