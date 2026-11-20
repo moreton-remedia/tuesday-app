@@ -627,7 +627,13 @@ function TaskRow({ task, columns, subitems, subitemColumns, boardId, allBoardTas
 
   async function handleSetAsTitle(name: string) {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    pendingNameRef.current = name;
     if (inputRef.current) inputRef.current.value = name;
+    const trimmed = name.trim();
+    if (trimmed && allBoardTasks) {
+      const dup = allBoardTasks.find(t => t.id !== task.id && (t.name ?? '').trim().toLowerCase() === trimmed.toLowerCase());
+      if (dup) { setDuplicateOf(dup); return; }
+    }
     const queryKey = orpcUtils.board.getBoardData.queryOptions({ input: { boardId } }).queryKey;
     const prev = qc.getQueryData(queryKey);
     qc.setQueryData(queryKey, (old: any) =>
