@@ -631,7 +631,6 @@ export const mergeIntoExisting = workspaceScoped
       .where(and(
         eq(columnTable.boardId, boardId),
         eq(columnTable.type, 'status'),
-        eq(columnTable.scope, 'task'),
       ))
       .orderBy(asc(columnTable.position));
 

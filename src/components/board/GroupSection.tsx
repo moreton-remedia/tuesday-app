@@ -550,8 +550,16 @@ function TaskRow({ task, columns, subitems, subitemColumns, boardId, allBoardTas
     const dup = duplicateOf;
     setDuplicateOf(null);
     if (!dup) return;
-    await orpcClient.task.mergeIntoExisting({ newTaskId: task.id, existingTaskId: dup.id });
-    invalidate();
+    try {
+      await orpcClient.task.mergeIntoExisting({ newTaskId: task.id, existingTaskId: dup.id });
+    } catch {
+      toast.error('Failed to update task. Please try again.');
+      return;
+    }
+    await qc.fetchQuery({
+      ...orpcUtils.board.getBoardData.queryOptions({ input: { boardId } }),
+      staleTime: 0,
+    });
   }
 
   async function handleFieldChange(colId: string, value: string) {
