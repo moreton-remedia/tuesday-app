@@ -356,6 +356,7 @@ async function runAutomationsForLinksToTask(changedTaskId: string) {
 
     for (const task of linkingTasks) {
       const fields = (task.fields as Record<string, string>) ?? {};
+      if (Object.values(fields).includes('__revisit__')) continue;
       if (!(await evaluateTrigger(auto.trigger, fields))) continue;
       for (const action of auto.actions) {
         await executeAction(action, task.id, task.groupId, auto.boardId, fields);
@@ -372,6 +373,9 @@ async function runTaskAutomations(
   groupId: string,
   fields: Record<string, string>,
 ) {
+  // While a task has the Revisit status, all automations are suspended.
+  if (Object.values(fields).includes('__revisit__')) return;
+
   const [group] = await database.select({ boardId: groupTable.boardId })
     .from(groupTable).where(eq(groupTable.id, groupId));
   if (!group) return;
@@ -405,6 +409,11 @@ async function runSubitemTriggeredAutomations(
   groupId: string,
   changedSubitemFields: Record<string, string>,
 ) {
+  // Suspend automations if the parent task has the Revisit status.
+  const [parentTask] = await database.select({ fields: taskTable.fields })
+    .from(taskTable).where(eq(taskTable.id, taskId));
+  if (parentTask && Object.values((parentTask.fields as Record<string, string>) ?? {}).includes('__revisit__')) return;
+
   const [group] = await database.select({ boardId: groupTable.boardId })
     .from(groupTable).where(eq(groupTable.id, groupId));
   if (!group) return;
@@ -478,6 +487,8 @@ async function runBoardAutomations(boardId: string) {
   let fired = false;
   for (const task of taskRows) {
     const fields = (task.fields as Record<string, string>) ?? {};
+    // Skip tasks with Revisit status — all automations suspended until manually cleared.
+    if (Object.values(fields).includes('__revisit__')) continue;
     for (const auto of automations) {
       if (!(await evaluateTrigger(auto.trigger, fields))) continue;
       for (const action of auto.actions) {
@@ -624,9 +635,11 @@ async function executeAction(
 /**
  * When a user creates a task whose name already exists and chooses to edit the
  * existing one, this procedure atomically:
- *   1. Sets the existing task's first status column to the reserved '__revisit__' key
- *   2. Deletes the new empty task
- * The '__revisit__' status is protected — automations cannot set or clear it.
+ *   1. Moves the existing task to the new task's group
+ *   2. Sets the existing task's first status column to the reserved '__revisit__' key
+ *   3. Deletes the new empty task
+ * While '__revisit__' is set, ALL automations are blocked on that task.
+ * They resume the moment the user manually changes the main status.
  */
 export const mergeIntoExisting = workspaceScoped
   .input(z.object({ newTaskId: z.string(), existingTaskId: z.string() }))
@@ -634,7 +647,16 @@ export const mergeIntoExisting = workspaceScoped
     const boardId = await boardIdFromTask(input.existingTaskId);
     if (!boardId) throw new ORPCError('NOT_FOUND', { message: 'Task not found.' });
 
-    // Find the first task-scoped status column (by position)
+    // Move the existing task to the new task's group
+    const [newTask] = await database.select({ groupId: taskTable.groupId })
+      .from(taskTable).where(eq(taskTable.id, input.newTaskId));
+    if (newTask) {
+      await database.update(taskTable)
+        .set({ groupId: newTask.groupId, updatedAt: new Date() })
+        .where(eq(taskTable.id, input.existingTaskId));
+    }
+
+    // Set Revisit on the first status column
     const [statusCol] = await database.select({ id: columnTable.id })
       .from(columnTable)
       .where(and(
