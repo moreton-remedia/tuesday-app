@@ -449,11 +449,20 @@ async function runSubitemTriggeredAutomations(
   if (fired) broadcastBoardUpdate(group.boardId);
 }
 
+// Per-board cooldown: prevents concurrent page-load scans from running
+// automations twice when multiple users open the same board simultaneously.
+const automationScanCooldown = new Map<string, number>();
+const SCAN_COOLDOWN_MS = 10_000; // 10 seconds
+
 /**
  * Scan every task in a board and run any automation whose trigger condition
  * currently matches — called on page load to catch up on pending actions.
  */
 async function runBoardAutomations(boardId: string) {
+  const now = Date.now();
+  const lastRun = automationScanCooldown.get(boardId) ?? 0;
+  if (now - lastRun < SCAN_COOLDOWN_MS) return;
+  automationScanCooldown.set(boardId, now);
   const automations = await database.select()
     .from(automationTable)
     .where(and(eq(automationTable.boardId, boardId), eq(automationTable.enabled, 1)));
