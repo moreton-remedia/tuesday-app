@@ -301,6 +301,9 @@ function DateCell({ value, onChange }: { value: string; onChange: (v: string) =>
 
 type StatusOption = { key: string; label: string; colorKey: string };
 
+const REVISIT_KEY = '__revisit__';
+const REVISIT_OPTION: StatusOption = { key: REVISIT_KEY, label: 'Revisit', colorKey: 'purple' };
+
 function StatusCell({
   value,
   statusOptions,
@@ -312,7 +315,7 @@ function StatusCell({
 }) {
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const current = statusOptions.find(o => o.key === value);
+  const current = value === REVISIT_KEY ? REVISIT_OPTION : statusOptions.find(o => o.key === value);
 
   return (
     <div className="w-full h-full">

@@ -519,6 +519,8 @@ async function executeAction(
       if (!currentTask) break;
       const taskFields = (currentTask.fields as Record<string, string>) ?? {};
       if (taskFields[action.colId] === action.value) break; // already the target value — skip
+      // Revisit is a protected status — automations cannot set it or change it
+      if (action.type === 'set-status' && (action.value === '__revisit__' || taskFields[action.colId] === '__revisit__')) break;
       const newFields = { ...taskFields, [action.colId]: action.value };
       await database.update(taskTable)
         .set({ fields: newFields, updatedAt: new Date() })
@@ -607,6 +609,49 @@ async function executeAction(
     }
   }
 }
+
+// ── Merge duplicate into existing ────────────────────────────────────────────
+
+/**
+ * When a user creates a task whose name already exists and chooses to edit the
+ * existing one, this procedure atomically:
+ *   1. Sets the existing task's first status column to the reserved '__revisit__' key
+ *   2. Deletes the new empty task
+ * The '__revisit__' status is protected — automations cannot set or clear it.
+ */
+export const mergeIntoExisting = workspaceScoped
+  .input(z.object({ newTaskId: z.string(), existingTaskId: z.string() }))
+  .handler(async ({ input }) => {
+    const boardId = await boardIdFromTask(input.existingTaskId);
+    if (!boardId) throw new ORPCError('NOT_FOUND', { message: 'Task not found.' });
+
+    // Find the first task-scoped status column (by position)
+    const [statusCol] = await database.select({ id: columnTable.id })
+      .from(columnTable)
+      .where(and(
+        eq(columnTable.boardId, boardId),
+        eq(columnTable.type, 'status'),
+        eq(columnTable.scope, 'task'),
+      ))
+      .orderBy(asc(columnTable.position));
+
+    if (statusCol) {
+      const [existing] = await database.select({ fields: taskTable.fields })
+        .from(taskTable).where(eq(taskTable.id, input.existingTaskId));
+      if (existing) {
+        const fields = (existing.fields as Record<string, string>) ?? {};
+        await database.update(taskTable)
+          .set({ fields: { ...fields, [statusCol.id]: '__revisit__' }, updatedAt: new Date() })
+          .where(eq(taskTable.id, input.existingTaskId));
+      }
+    }
+
+    // Delete the new empty task (ignore if already gone)
+    await database.delete(taskTable).where(eq(taskTable.id, input.newTaskId));
+
+    broadcastBoardUpdate(boardId);
+    return { success: true };
+  });
 
 // ── On-load automation check ──────────────────────────────────────────────────
 

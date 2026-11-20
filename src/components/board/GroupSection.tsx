@@ -520,6 +520,16 @@ function TaskRow({ task, columns, subitems, subitemColumns, boardId, allBoardTas
       );
       try {
         await orpcClient.task.updateTask({ taskId: task.id, name });
+        // Post-save: catch concurrent duplicates created by another user between
+        // the client-side check above and when the name actually landed on the server.
+        const freshData = await qc.fetchQuery({
+          ...orpcUtils.board.getBoardData.queryOptions({ input: { boardId } }),
+          staleTime: 0,
+        }) as any;
+        const concurrentDup = (freshData?.tasks as Task[] | undefined)?.find(
+          t => t.id !== task.id && (t.name ?? '').trim().toLowerCase() === trimmed.toLowerCase(),
+        );
+        if (concurrentDup) { setDuplicateOf(concurrentDup); return; }
         invalidate();
       } catch {
         qc.setQueryData(queryKey, prev);
@@ -539,8 +549,8 @@ function TaskRow({ task, columns, subitems, subitemColumns, boardId, allBoardTas
   async function handleUseExisting() {
     const dup = duplicateOf;
     setDuplicateOf(null);
-    if (dup) await orpcClient.task.updateTask({ taskId: dup.id, groupId: task.groupId });
-    await orpcClient.task.deleteTask({ taskId: task.id });
+    if (!dup) return;
+    await orpcClient.task.mergeIntoExisting({ newTaskId: task.id, existingTaskId: dup.id });
     invalidate();
   }
 
