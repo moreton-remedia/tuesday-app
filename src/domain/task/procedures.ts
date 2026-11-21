@@ -356,9 +356,10 @@ async function runAutomationsForLinksToTask(changedTaskId: string) {
 
     for (const task of linkingTasks) {
       const fields = (task.fields as Record<string, string>) ?? {};
-      if (Object.values(fields).includes('__revisit__')) continue;
+      const isRevisit = Object.values(fields).includes('__revisit__');
       if (!(await evaluateTrigger(auto.trigger, fields))) continue;
       for (const action of auto.actions) {
+        if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
         await executeAction(action, task.id, task.groupId, auto.boardId, fields);
         boardsToUpdate.add(auto.boardId);
       }
@@ -373,9 +374,6 @@ async function runTaskAutomations(
   groupId: string,
   fields: Record<string, string>,
 ) {
-  // While a task has the Revisit status, all automations are suspended.
-  if (Object.values(fields).includes('__revisit__')) return;
-
   const [group] = await database.select({ boardId: groupTable.boardId })
     .from(groupTable).where(eq(groupTable.id, groupId));
   if (!group) return;
@@ -384,10 +382,14 @@ async function runTaskAutomations(
     .from(automationTable)
     .where(and(eq(automationTable.boardId, group.boardId), eq(automationTable.enabled, 1)));
 
+  const isRevisit = Object.values(fields).includes('__revisit__');
   let fired = false;
   for (const auto of automations) {
     if (!(await evaluateTrigger(auto.trigger, fields))) continue;
     for (const action of auto.actions) {
+      // Revisit tasks may not be moved to another group or board via automation.
+      // (set-status on the revisit column is already blocked inside executeAction.)
+      if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
       await executeAction(action, taskId, groupId, group.boardId, fields);
       fired = true;
     }
@@ -409,10 +411,11 @@ async function runSubitemTriggeredAutomations(
   groupId: string,
   changedSubitemFields: Record<string, string>,
 ) {
-  // Suspend automations if the parent task has the Revisit status.
   const [parentTask] = await database.select({ fields: taskTable.fields })
     .from(taskTable).where(eq(taskTable.id, taskId));
-  if (parentTask && Object.values((parentTask.fields as Record<string, string>) ?? {}).includes('__revisit__')) return;
+  const isRevisit = parentTask
+    ? Object.values((parentTask.fields as Record<string, string>) ?? {}).includes('__revisit__')
+    : false;
 
   const [group] = await database.select({ boardId: groupTable.boardId })
     .from(groupTable).where(eq(groupTable.id, groupId));
@@ -450,6 +453,7 @@ async function runSubitemTriggeredAutomations(
 
     if (!shouldFire) continue;
     for (const action of auto.actions) {
+      if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
       await executeAction(action, taskId, groupId, group.boardId, changedSubitemFields);
       fired = true;
     }
@@ -487,11 +491,11 @@ async function runBoardAutomations(boardId: string) {
   let fired = false;
   for (const task of taskRows) {
     const fields = (task.fields as Record<string, string>) ?? {};
-    // Skip tasks with Revisit status — all automations suspended until manually cleared.
-    if (Object.values(fields).includes('__revisit__')) continue;
+    const isRevisit = Object.values(fields).includes('__revisit__');
     for (const auto of automations) {
       if (!(await evaluateTrigger(auto.trigger, fields))) continue;
       for (const action of auto.actions) {
+        if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
         // For state-based triggers (status / dropdown / text-contains), only run
         // move-to-group and copy-to on the page-load scan (positional catch-up).
         // Skip create-* AND set-status / set-dropdown — those should only fire on
