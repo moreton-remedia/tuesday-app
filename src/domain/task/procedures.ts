@@ -359,7 +359,7 @@ async function runAutomationsForLinksToTask(changedTaskId: string) {
       const isRevisit = Object.values(fields).includes('__revisit__');
       if (!(await evaluateTrigger(auto.trigger, fields))) continue;
       for (const action of auto.actions) {
-        if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
+        if (isRevisit && action.type === 'move-to-group') continue;
         await executeAction(action, task.id, task.groupId, auto.boardId, fields);
         boardsToUpdate.add(auto.boardId);
       }
@@ -389,7 +389,7 @@ async function runTaskAutomations(
     for (const action of auto.actions) {
       // Revisit tasks may not be moved to another group or board via automation.
       // (set-status on the revisit column is already blocked inside executeAction.)
-      if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
+      if (isRevisit && action.type === 'move-to-group') continue;
       await executeAction(action, taskId, groupId, group.boardId, fields);
       fired = true;
     }
@@ -453,7 +453,7 @@ async function runSubitemTriggeredAutomations(
 
     if (!shouldFire) continue;
     for (const action of auto.actions) {
-      if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
+      if (isRevisit && action.type === 'move-to-group') continue;
       await executeAction(action, taskId, groupId, group.boardId, changedSubitemFields);
       fired = true;
     }
@@ -495,7 +495,7 @@ async function runBoardAutomations(boardId: string) {
     for (const auto of automations) {
       if (!(await evaluateTrigger(auto.trigger, fields))) continue;
       for (const action of auto.actions) {
-        if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
+        if (isRevisit && action.type === 'move-to-group') continue;
         // For state-based triggers (status / dropdown / text-contains), only run
         // move-to-group and copy-to on the page-load scan (positional catch-up).
         // Skip create-* AND set-status / set-dropdown — those should only fire on
@@ -575,14 +575,37 @@ async function executeAction(
       if (!action.groupId) break;
       const [source] = await database.select().from(taskTable).where(eq(taskTable.id, taskId));
       if (!source) break;
-      // Skip if a task with the same name already exists in the target group
-      const [dup] = await database.select({ id: taskTable.id })
+      const isRevisit = Object.values(fields).includes('__revisit__');
+      // Check the entire destination board (not just the destination group) for a task with the same name
+      const destBoardId = await boardIdFromGroup(action.groupId);
+      if (!destBoardId) break;
+      const [dup] = await database.select({ id: taskTable.id, fields: taskTable.fields })
         .from(taskTable)
+        .innerJoin(groupTable, eq(taskTable.groupId, groupTable.id))
         .where(and(
-          eq(taskTable.groupId, action.groupId),
+          eq(groupTable.boardId, destBoardId),
           sql`lower(${taskTable.name}) = lower(${source.name})`,
         ));
-      if (dup) break;
+      if (dup) {
+        if (isRevisit) {
+          // The source is a Revisit — move the existing copy back to the source group
+          // and clear its first status column so it's ready to work on again.
+          const [firstStatusCol] = await database.select({ id: columnTable.id })
+            .from(columnTable)
+            .where(and(eq(columnTable.boardId, destBoardId), eq(columnTable.type, 'status')))
+            .orderBy(asc(columnTable.position));
+          const dupFields = (dup.fields as Record<string, string>) ?? {};
+          const resetFields = firstStatusCol
+            ? { ...dupFields, [firstStatusCol.id]: '' }
+            : dupFields;
+          await database.update(taskTable)
+            .set({ groupId, fields: resetFields, updatedAt: new Date() })
+            .where(eq(taskTable.id, dup.id));
+          if (destBoardId !== boardId) broadcastBoardUpdate(destBoardId);
+        }
+        break;
+      }
+      if (isRevisit) break; // No existing copy and source is Revisit — don't create one
       await database.insert(taskTable).values({
         id: nanoid(),
         groupId: action.groupId,
@@ -590,9 +613,7 @@ async function executeAction(
         fields: source.fields,
         position: Date.now(),
       });
-      // Broadcast to the destination board if it differs from the source
-      const destBoardId = await boardIdFromGroup(action.groupId);
-      if (destBoardId && destBoardId !== boardId) broadcastBoardUpdate(destBoardId);
+      if (destBoardId !== boardId) broadcastBoardUpdate(destBoardId);
       break;
     }
     case 'create-subitem': {
