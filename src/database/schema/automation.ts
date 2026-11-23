@@ -26,6 +26,16 @@ export type AutomationTrigger = {
     linkedOp?: 'eq' | 'contains';
   }>;
   scope?: 'any' | 'all';
+  /** If ANY of these condition groups matches, the automation does NOT fire. */
+  unlessConditions?: Array<{
+    colId: string;
+    value: string;
+    op?: 'eq' | 'contains';
+    connector?: 'and' | 'or';
+    linkedColId?: string;
+    linkedValue?: string;
+    linkedOp?: 'eq' | 'contains';
+  }>;
 };
 
 export type AutomationAction = {

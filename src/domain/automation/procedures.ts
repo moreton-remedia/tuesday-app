@@ -24,6 +24,15 @@ const triggerSchema = z.object({
     linkedOp: z.enum(['eq', 'contains']).optional(),
   })).optional(),
   scope: z.enum(['any', 'all']).optional(),
+  unlessConditions: z.array(z.object({
+    colId: z.string(),
+    value: z.string(),
+    op: z.enum(['eq', 'contains']).optional(),
+    connector: z.enum(['and', 'or']).optional(),
+    linkedColId: z.string().optional(),
+    linkedValue: z.string().optional(),
+    linkedOp: z.enum(['eq', 'contains']).optional(),
+  })).optional(),
 });
 
 const actionSchema = z.object({

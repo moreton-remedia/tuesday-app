@@ -498,6 +498,28 @@ function AutomationCard({
             ))}
           </div>
         </div>
+        {(auto.trigger.unlessConditions ?? []).length > 0 && (
+          <>
+            <div className="pl-[26px] text-app-t3/40 text-xs leading-none py-0.5">↓</div>
+            <div className="flex items-start gap-2">
+              <span className="flex-shrink-0 text-[9px] font-bold tracking-widest text-amber-500/80 bg-amber-500/15 px-1 py-0.5 rounded mt-0.5 uppercase">UNLESS</span>
+              <div className="space-y-0.5 min-w-0">
+                {(auto.trigger.unlessConditions ?? []).map((cond, i) => {
+                  const col = columns.find(c => c.id === cond.colId);
+                  const connLabel = i > 0 ? (cond.connector === 'or' ? 'Or' : 'And') : null;
+                  return (
+                    <p key={i} className="text-sm text-app-t3">
+                      {connLabel && <span className="text-app-t2 font-medium">{connLabel} </span>}
+                      <span className="text-app-t2">{col?.label ?? '…'}</span>
+                      {cond.op === 'contains' ? ' contains ' : ' is '}
+                      <span className="text-amber-500/70">{cond.value}</span>
+                    </p>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -591,6 +613,19 @@ function AutomationEditor({
       : [emptyAction(boardId)],
   );
 
+  const [unlessConditions, setUnlessConditions] = useState<ConditionDraft[]>(() =>
+    (initial?.trigger.unlessConditions ?? []).map(c => ({
+      colId: c.colId,
+      value: c.value,
+      op: c.op,
+      connector: c.connector,
+      linkedColId: c.linkedColId,
+      linkedValue: c.linkedValue,
+      linkedOp: c.linkedOp,
+    })),
+  );
+  const [showUnless, setShowUnless] = useState(() => !!(initial?.trigger.unlessConditions?.length));
+
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [openTokenId, setOpenTokenId] = useState<string | null>(null);
@@ -618,6 +653,25 @@ function AutomationEditor({
     setActions(prev => [...prev, emptyAction(boardId)]);
   }
 
+  function updateUnlessCondition(idx: number, patch: Partial<ConditionDraft>) {
+    setUnlessConditions(prev => prev.map((c, i) => i === idx ? { ...c, ...patch } : c));
+  }
+  function removeUnlessCondition(idx: number) {
+    setUnlessConditions(prev => prev.filter((_, i) => i !== idx));
+  }
+  function addUnlessCondition() {
+    setUnlessConditions(prev => [...prev, { colId: columns[0]?.id ?? '', value: '', connector: 'and' }]);
+  }
+  function toggleUnless() {
+    if (showUnless) {
+      setShowUnless(false);
+      setUnlessConditions([]);
+    } else {
+      setShowUnless(true);
+      setUnlessConditions([{ colId: columns[0]?.id ?? '', value: '' }]);
+    }
+  }
+
   const canSave =
     conditions.every(c => {
       const col = allColumns.find(col => col.id === c.colId);
@@ -629,6 +683,11 @@ function AutomationEditor({
       if (a.type === 'set-notes') return !!a.colId;
       if (a.type === 'move-to-group' || a.type === 'copy-to') return !!a.groupId;
       return true; // create-subitem, create-task: name can be empty
+    }) &&
+    unlessConditions.every(c => {
+      const col = allColumns.find(col => col.id === c.colId);
+      if (col?.type === 'link') return !!(c.colId && c.linkedColId && c.linkedValue);
+      return !!(c.colId && c.value);
     });
 
   async function handleSave() {
@@ -674,6 +733,24 @@ function AutomationEditor({
           }),
         } : {}),
         scope,
+        ...(unlessConditions.length > 0 ? {
+          unlessConditions: unlessConditions.map(u => {
+            const uCol = allColumns.find(c => c.id === u.colId);
+            const isLinkUnless = uCol?.type === 'link';
+            const op: 'eq' | 'contains' = uCol?.type === 'notes' ? 'contains' : 'eq';
+            return {
+              colId: u.colId,
+              value: isLinkUnless ? '' : (u.value ?? ''),
+              op,
+              connector: (u.connector ?? 'and') as 'and' | 'or',
+              ...(isLinkUnless ? {
+                linkedColId: u.linkedColId,
+                linkedValue: u.linkedValue,
+                linkedOp: u.linkedOp ?? 'eq',
+              } : {}),
+            };
+          }),
+        } : {}),
       };
       const builtActions: AutomationAction[] = actions.map(a =>
         a.type === 'set-status' || a.type === 'set-dropdown'
@@ -783,6 +860,52 @@ function AutomationEditor({
           </button>
         </div>
       </div>
+
+      {/* ── Unless toggle ── */}
+      <div className="px-4 py-2 border-t border-app-ln/40 bg-app-s2/40 flex items-center">
+        <button
+          onClick={toggleUnless}
+          className={`flex items-center gap-1.5 text-xs transition-colors ${showUnless ? 'text-amber-500' : 'text-app-t3/60 hover:text-app-t3'}`}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+          </svg>
+          Unless…
+        </button>
+      </div>
+
+      {/* ── Unless conditions ── */}
+      {showUnless && (
+        <div className="px-4 py-3.5 flex items-start gap-3 bg-app-s2/40 border-t border-app-ln/40">
+          <span className="flex-shrink-0 bg-amber-500/80 text-white text-[10px] font-bold tracking-widest px-1.5 py-1 rounded mt-1 uppercase">
+            UNLESS
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="space-y-1.5">
+              {unlessConditions.map((cond, idx) => (
+                <ConditionRow
+                  key={idx}
+                  cond={cond}
+                  idx={idx}
+                  scope="all"
+                  showScope={false}
+                  columns={columns}
+                  allColumns={allColumns}
+                  canRemove={unlessConditions.length > 1}
+                  onChange={patch => updateUnlessCondition(idx, patch)}
+                  onRemove={() => removeUnlessCondition(idx)}
+                />
+              ))}
+            </div>
+            <button
+              onClick={addUnlessCondition}
+              className="mt-2.5 flex items-center gap-1 text-xs text-app-t3/60 hover:text-app-t2 transition-colors"
+            >
+              <span className="text-sm leading-none">+</span> Add unless condition
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Footer ── */}
       {saveError && (

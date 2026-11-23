@@ -229,41 +229,13 @@ async function evaluateTrigger(
   trigger: AutomationTrigger,
   fields: Record<string, string>,
 ): Promise<boolean> {
-  if (trigger.type === 'date-is') {
-    const raw = fields[trigger.colId];
-    if (!raw) return false;
-    // Compare date portion only (strip optional time component)
-    const dateOnly = raw.includes('T') ? raw.slice(0, 10) : raw;
-    const today = new Date().toISOString().slice(0, 10);
-    if (trigger.value === 'today')   return dateOnly === today;
-    if (trigger.value === 'past')    return dateOnly < today;
-    if (trigger.value === 'future')  return dateOnly > today;
-    return false;
-  }
-
-  if (trigger.type === 'link-changes') {
-    const linkedTaskId = fields[trigger.colId];
-    if (!linkedTaskId || !trigger.linkedColId) return false;
-    const [linkedTask] = await database.select({ fields: taskTable.fields })
-      .from(taskTable).where(eq(taskTable.id, linkedTaskId));
-    if (!linkedTask) return false;
-    const linkedFields = (linkedTask.fields as Record<string, string> | null) ?? {};
-    const fieldVal = linkedFields[trigger.linkedColId] ?? '';
-    return trigger.linkedOp === 'contains'
-      ? fieldVal.toLowerCase().includes((trigger.linkedValue ?? '').toLowerCase())
-      : fieldVal === (trigger.linkedValue ?? '');
-  }
-
-  // status-changes-to / dropdown-changes-to / text-contains
   type Cond = {
     colId: string; value: string; op: 'eq' | 'contains';
     linkedColId?: string; linkedValue?: string; linkedOp?: 'eq' | 'contains';
   };
-  const scope = trigger.scope ?? 'all';
 
   const evalCond = async (c: Cond): Promise<boolean> => {
     if (c.linkedColId !== undefined) {
-      // Link-column extra condition: look up the linked task's field value
       const linkedTaskId = fields[c.colId];
       if (!linkedTaskId) return false;
       const [linkedTask] = await database.select({ fields: taskTable.fields })
@@ -280,6 +252,62 @@ async function evaluateTrigger(
       ? fieldVal.toLowerCase().includes(c.value.toLowerCase())
       : fieldVal === c.value;
   };
+
+  // Returns true if any unless-condition group matches (meaning the trigger should NOT fire).
+  const unlessBlocks = async (): Promise<boolean> => {
+    if (!trigger.unlessConditions?.length) return false;
+    const unlessConds = trigger.unlessConditions.map(c => ({
+      colId: c.colId,
+      value: c.value,
+      op: (c.op ?? 'eq') as 'eq' | 'contains',
+      connector: (c.connector ?? 'and') as 'and' | 'or',
+      linkedColId: c.linkedColId,
+      linkedValue: c.linkedValue,
+      linkedOp: c.linkedOp,
+    }));
+    const unlessGroups: Cond[][] = [[unlessConds[0]!]];
+    for (const uc of unlessConds.slice(1)) {
+      if (uc.connector === 'or') unlessGroups.push([uc]);
+      else unlessGroups[unlessGroups.length - 1]!.push(uc);
+    }
+    for (const group of unlessGroups) {
+      const results = await Promise.all(group.map(evalCond));
+      if (results.every(Boolean)) return true;
+    }
+    return false;
+  };
+
+  if (trigger.type === 'date-is') {
+    const raw = fields[trigger.colId];
+    if (!raw) return false;
+    // Compare date portion only (strip optional time component)
+    const dateOnly = raw.includes('T') ? raw.slice(0, 10) : raw;
+    const today = new Date().toISOString().slice(0, 10);
+    let dateResult = false;
+    if (trigger.value === 'today')   dateResult = dateOnly === today;
+    else if (trigger.value === 'past')    dateResult = dateOnly < today;
+    else if (trigger.value === 'future')  dateResult = dateOnly > today;
+    if (!dateResult) return false;
+    return !(await unlessBlocks());
+  }
+
+  if (trigger.type === 'link-changes') {
+    const linkedTaskId = fields[trigger.colId];
+    if (!linkedTaskId || !trigger.linkedColId) return false;
+    const [linkedTask] = await database.select({ fields: taskTable.fields })
+      .from(taskTable).where(eq(taskTable.id, linkedTaskId));
+    if (!linkedTask) return false;
+    const linkedFields = (linkedTask.fields as Record<string, string> | null) ?? {};
+    const fieldVal = linkedFields[trigger.linkedColId] ?? '';
+    const linkResult = trigger.linkedOp === 'contains'
+      ? fieldVal.toLowerCase().includes((trigger.linkedValue ?? '').toLowerCase())
+      : fieldVal === (trigger.linkedValue ?? '');
+    if (!linkResult) return false;
+    return !(await unlessBlocks());
+  }
+
+  // status-changes-to / dropdown-changes-to / text-contains
+  const scope = trigger.scope ?? 'all';
 
   const primary: Cond = {
     colId: trigger.colId,
@@ -298,30 +326,35 @@ async function evaluateTrigger(
     linkedOp: c.linkedOp,
   }));
 
-  if (extras.length === 0) return evalCond(primary);
-
-  // Build groups using standard boolean precedence: AND binds tighter than OR.
-  // 'and'-connected conditions stay in the same group (all must match within the group).
-  // 'or' starts a new group.  At least one group must match overall.
-  //
-  // Note: scope only controls the DEFAULT connector added to new conditions in the UI
-  // (scope='all' → 'and' default, scope='any' → 'or' default).  The actual evaluation
-  // is driven entirely by the per-condition connectors — groups.every would silently
-  // turn every 'or' into 'and' when scope='all', which is wrong.
-  const groups: Cond[][] = [[primary]];
-  for (const extra of extras) {
-    if (extra.connector === 'or') {
-      groups.push([extra]);
-    } else {
-      groups[groups.length - 1]!.push(extra);
+  let mainResult: boolean;
+  if (extras.length === 0) {
+    mainResult = await evalCond(primary);
+  } else {
+    // Build groups using standard boolean precedence: AND binds tighter than OR.
+    // 'and'-connected conditions stay in the same group (all must match within the group).
+    // 'or' starts a new group.  At least one group must match overall.
+    //
+    // Note: scope only controls the DEFAULT connector added to new conditions in the UI
+    // (scope='all' → 'and' default, scope='any' → 'or' default).  The actual evaluation
+    // is driven entirely by the per-condition connectors — groups.every would silently
+    // turn every 'or' into 'and' when scope='all', which is wrong.
+    const groups: Cond[][] = [[primary]];
+    for (const extra of extras) {
+      if (extra.connector === 'or') {
+        groups.push([extra]);
+      } else {
+        groups[groups.length - 1]!.push(extra);
+      }
+    }
+    mainResult = false;
+    for (const group of groups) {
+      const results = await Promise.all(group.map(evalCond));
+      if (results.every(Boolean)) { mainResult = true; break; }
     }
   }
 
-  for (const group of groups) {
-    const results = await Promise.all(group.map(evalCond));
-    if (results.every(Boolean)) return true;
-  }
-  return false;
+  if (!mainResult) return false;
+  return !(await unlessBlocks());
 }
 
 /**
