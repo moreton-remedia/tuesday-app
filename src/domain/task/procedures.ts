@@ -64,12 +64,19 @@ export const updateTask = workspaceScoped
     if (input.fields !== undefined) patch.fields = input.fields;
     if (input.groupId !== undefined) patch.groupId = input.groupId;
 
-    // Capture old board before update so we can notify it too when moving cross-board
+    // Capture old board before update so we can notify it too when moving cross-board.
+    // Also capture prev fields when fields are changing so edge-trigger detection works.
     let oldBoardId: string | null = null;
-    if (input.groupId !== undefined) {
-      const [old] = await database.select({ groupId: taskTable.groupId })
+    let prevFields: Record<string, string> | undefined;
+    if (input.groupId !== undefined || input.fields !== undefined) {
+      const [old] = await database.select({ groupId: taskTable.groupId, fields: taskTable.fields })
         .from(taskTable).where(eq(taskTable.id, input.taskId));
-      if (old) oldBoardId = await boardIdFromGroup(old.groupId);
+      if (old) {
+        oldBoardId = input.groupId !== undefined ? await boardIdFromGroup(old.groupId) : null;
+        prevFields = input.fields !== undefined
+          ? ((old.fields as Record<string, string>) ?? {})
+          : undefined;
+      }
     }
 
     const [task] = await database.update(taskTable).set(patch).where(eq(taskTable.id, input.taskId)).returning();
@@ -79,7 +86,7 @@ export const updateTask = workspaceScoped
     // the server responds (same reasoning as updateTaskFields above).
     if (input.fields !== undefined) {
       await Promise.all([
-        runTaskAutomations(task.id, task.groupId, (task.fields as Record<string, string>) ?? {}).catch(() => {}),
+        runTaskAutomations(task.id, task.groupId, (task.fields as Record<string, string>) ?? {}, prevFields).catch(() => {}),
         runAutomationsForLinksToTask(task.id).catch(() => {}),
       ]);
     }
@@ -93,6 +100,12 @@ export const updateTask = workspaceScoped
 export const updateTaskFields = workspaceScoped
   .input(z.object({ taskId: z.string(), fields: fieldsSchema }))
   .handler(async ({ input }) => {
+    // Read previous fields so edge-trigger detection can skip automations whose
+    // trigger column didn't actually change.
+    const [prevTask] = await database.select({ fields: taskTable.fields })
+      .from(taskTable).where(eq(taskTable.id, input.taskId));
+    const prevFields = (prevTask?.fields as Record<string, string>) ?? {};
+
     const [task] = await database.update(taskTable)
       .set({ fields: input.fields, updatedAt: new Date() })
       .where(eq(taskTable.id, input.taskId))
@@ -102,7 +115,7 @@ export const updateTaskFields = workspaceScoped
     // before the server responds — the client's invalidation then fetches the fully
     // resolved state in one round trip instead of racing the fire-and-forget.
     await Promise.all([
-      runTaskAutomations(task.id, task.groupId, input.fields).catch(() => {}),
+      runTaskAutomations(task.id, task.groupId, input.fields, prevFields).catch(() => {}),
       runAutomationsForLinksToTask(task.id).catch(() => {}),
     ]);
     boardIdFromGroup(task.groupId).then(id => id && broadcastBoardUpdate(id)).catch(() => {});
@@ -406,6 +419,7 @@ async function runTaskAutomations(
   taskId: string,
   groupId: string,
   fields: Record<string, string>,
+  prevFields?: Record<string, string>,
 ) {
   const [group] = await database.select({ boardId: groupTable.boardId })
     .from(groupTable).where(eq(groupTable.id, groupId));
@@ -418,6 +432,20 @@ async function runTaskAutomations(
   const isRevisit = Object.values(fields).includes('__revisit__');
   let fired = false;
   for (const auto of automations) {
+    // Edge-trigger: for state-based "changes to" triggers, only fire when the trigger
+    // column's value actually changed in this update. Without this guard every field
+    // save (notes, a different column, etc.) re-fires the automation even though the
+    // trigger column was already in the matching state.
+    if (prevFields !== undefined) {
+      const { type, colId } = auto.trigger;
+      if (
+        type === 'status-changes-to' ||
+        type === 'dropdown-changes-to' ||
+        type === 'text-contains'
+      ) {
+        if ((prevFields[colId] ?? '') === (fields[colId] ?? '')) continue;
+      }
+    }
     if (!(await evaluateTrigger(auto.trigger, fields))) continue;
     for (const action of auto.actions) {
       // Revisit tasks may not be moved to another group or board via automation.
@@ -529,23 +557,18 @@ async function runBoardAutomations(boardId: string) {
       if (!(await evaluateTrigger(auto.trigger, fields))) continue;
       for (const action of auto.actions) {
         if (isRevisit && action.type === 'move-to-group') continue;
-        // For state-based triggers (status / dropdown / text-contains), only run
-        // move-to-group and copy-to on the page-load scan (positional catch-up).
-        // Skip create-* AND set-status / set-dropdown — those should only fire on
-        // the specific field-change event that triggered the automation.
-        // Without this guard, every board load re-applies the status override,
-        // overwriting whatever value the user intentionally set since last load.
+        // For state-based triggers (status-changes-to / dropdown-changes-to /
+        // text-contains), skip ALL actions on the page-load scan.
+        // These are edge-triggers — they should only fire when the trigger column
+        // actually changes value, not every time the board is loaded.  Running
+        // them here would move tasks back to groups they were manually relocated
+        // from, re-copy tasks that were already copied, etc.
         //
-        // For link-changes triggers the condition is event-like and already specific,
-        // so all action types ARE expected to run on load as a catch-up mechanism.
+        // For date-is and link-changes the condition is inherently time/event-
+        // sensitive, so a page-load catch-up for all action types is correct.
         if (
           auto.trigger.type !== 'link-changes' &&
-          auto.trigger.type !== 'date-is' &&
-          (action.type === 'create-subitem' ||
-           action.type === 'create-task' ||
-           action.type === 'set-status' ||
-           action.type === 'set-dropdown' ||
-           action.type === 'set-notes')
+          auto.trigger.type !== 'date-is'
         ) continue;
         await executeAction(action, task.id, task.groupId, boardId, fields);
         fired = true;
