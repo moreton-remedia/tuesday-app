@@ -1,5 +1,5 @@
 import { ORPCError } from '@orpc/client';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { database, workspaceScoped } from '@/rpc/base';
 import { taskTable, subitemTable, groupTable, automationTable, columnTable, boardTable } from '@/database/schema';
@@ -405,7 +405,7 @@ async function runAutomationsForLinksToTask(changedTaskId: string) {
       const isRevisit = Object.values(fields).includes('__revisit__');
       if (!(await evaluateTrigger(auto.trigger, fields))) continue;
       for (const action of auto.actions) {
-        if (isRevisit && action.type === 'move-to-group') continue;
+        if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
         await executeAction(action, task.id, task.groupId, auto.boardId, fields);
         boardsToUpdate.add(auto.boardId);
       }
@@ -448,9 +448,10 @@ async function runTaskAutomations(
     }
     if (!(await evaluateTrigger(auto.trigger, fields))) continue;
     for (const action of auto.actions) {
-      // Revisit tasks may not be moved to another group or board via automation.
-      // (set-status on the revisit column is already blocked inside executeAction.)
-      if (isRevisit && action.type === 'move-to-group') continue;
+      // Revisit tasks may not be moved or copied via automation — these are blocked
+      // at the loop level so the bring-back / dedup logic inside executeAction is
+      // never reached for them. set-status protection stays inside executeAction.
+      if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
       await executeAction(action, taskId, groupId, group.boardId, fields);
       fired = true;
     }
@@ -514,7 +515,7 @@ async function runSubitemTriggeredAutomations(
 
     if (!shouldFire) continue;
     for (const action of auto.actions) {
-      if (isRevisit && action.type === 'move-to-group') continue;
+      if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
       await executeAction(action, taskId, groupId, group.boardId, changedSubitemFields);
       fired = true;
     }
@@ -556,7 +557,7 @@ async function runBoardAutomations(boardId: string) {
     for (const auto of automations) {
       if (!(await evaluateTrigger(auto.trigger, fields))) continue;
       for (const action of auto.actions) {
-        if (isRevisit && action.type === 'move-to-group') continue;
+        if (isRevisit && (action.type === 'move-to-group' || action.type === 'copy-to')) continue;
         // For state-based triggers (status-changes-to / dropdown-changes-to /
         // text-contains), skip ALL actions on the page-load scan.
         // These are edge-triggers — they should only fire when the trigger column
@@ -641,6 +642,7 @@ async function executeAction(
         .where(and(
           eq(groupTable.boardId, destBoardId),
           sql`lower(${taskTable.name}) = lower(${source.name})`,
+          ne(taskTable.id, taskId), // never match the source task itself (same-board copy)
         ));
       if (dup) {
         if (isRevisit) {
