@@ -306,15 +306,24 @@ async function evaluateTrigger(
 
   if (trigger.type === 'link-changes') {
     const linkedTaskId = fields[trigger.colId];
-    if (!linkedTaskId || !trigger.linkedColId) return false;
+    console.log('[link-changes] colId=%s linkedTaskId=%s linkedColId=%s linkedOp=%s linkedValue=%s', trigger.colId, linkedTaskId, trigger.linkedColId, trigger.linkedOp, trigger.linkedValue);
+    if (!linkedTaskId || !trigger.linkedColId) {
+      console.log('[link-changes] early-false: missing linkedTaskId or linkedColId');
+      return false;
+    }
     const [linkedTask] = await database.select({ fields: taskTable.fields })
       .from(taskTable).where(eq(taskTable.id, linkedTaskId));
-    if (!linkedTask) return false;
+    if (!linkedTask) {
+      console.log('[link-changes] early-false: linked task %s not found', linkedTaskId);
+      return false;
+    }
     const linkedFields = (linkedTask.fields as Record<string, string> | null) ?? {};
     const fieldVal = linkedFields[trigger.linkedColId] ?? '';
+    console.log('[link-changes] fieldVal=%s (linkedColId=%s, all linked fields=%j)', fieldVal, trigger.linkedColId, linkedFields);
     const linkResult = trigger.linkedOp === 'contains'
       ? fieldVal.toLowerCase().includes((trigger.linkedValue ?? '').toLowerCase())
       : fieldVal === (trigger.linkedValue ?? '');
+    console.log('[link-changes] linkResult=%s', linkResult);
     if (!linkResult) return false;
     return !(await unlessBlocks());
   }
@@ -399,6 +408,8 @@ async function runAutomationsForLinksToTask(changedTaskId: string) {
           sql`${taskTable.fields} ->> ${linkColId} = ${changedTaskId}`,
         ),
       );
+
+    console.log('[runAutomationsForLinksToTask] changedTaskId=%s autoId=%s boardId=%s linkColId=%s linkingTaskCount=%d', changedTaskId, auto.id, auto.boardId, linkColId, linkingTasks.length);
 
     for (const task of linkingTasks) {
       const fields = (task.fields as Record<string, string>) ?? {};
